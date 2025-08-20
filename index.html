@@ -237,6 +237,23 @@
             background: var(--danger);
         }
         
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-badge.active {
+            background-color: rgba(46, 204, 113, 0.2);
+            color: #27ae60;
+        }
+        
+        .status-badge.inactive {
+            background-color: rgba(231, 76, 60, 0.2);
+            color: #c0392b;
+        }
+        
         @media (max-width: 768px) {
             .user-table thead {
                 display: none;
@@ -294,6 +311,10 @@
             .modal-content {
                 width: 95%;
                 padding: 15px;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
             }
         }
     </style>
@@ -374,112 +395,229 @@
     </div>
 
     <script>
-        // Database simulation (using localStorage as a simple database)
+        // IndexedDB Database
         const Database = {
+            dbName: 'UserManagementDB',
+            dbVersion: 1,
+            db: null,
+            
             init() {
-                if (!localStorage.getItem('users')) {
-                    // Initialize with some sample data
-                    const users = [
-                        { id: 1, name: 'John Doe', email: 'john@example.com', role: 'Admin', status: 'Active' },
-                        { id: 2, name: 'Jane Smith', email: 'jane@example.com', role: 'User', status: 'Active' },
-                        { id: 3, name: 'Bob Johnson', email: 'bob@example.com', role: 'Editor', status: 'Inactive' }
-                    ];
-                    localStorage.setItem('users', JSON.stringify(users));
-                    localStorage.setItem('nextId', '4');
-                }
+                return new Promise((resolve, reject) => {
+                    const request = indexedDB.open(this.dbName, this.dbVersion);
+                    
+                    request.onerror = () => {
+                        reject(new Error('Failed to open database'));
+                    };
+                    
+                    request.onsuccess = (event) => {
+                        this.db = event.target.result;
+                        resolve(this.db);
+                    };
+                    
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        
+                        // Create users object store if it doesn't exist
+                        if (!db.objectStoreNames.contains('users')) {
+                            const store = db.createObjectStore('users', { keyPath: 'id', autoIncrement: true });
+                            store.createIndex('name', 'name', { unique: false });
+                            store.createIndex('email', 'email', { unique: true });
+                            store.createIndex('role', 'role', { unique: false });
+                            store.createIndex('status', 'status', { unique: false });
+                            
+                            // Add some sample data
+                            const users = [
+                                { name: 'John Doe', email: 'john@example.com', role: 'Admin', status: 'Active' },
+                                { name: 'Jane Smith', email: 'jane@example.com', role: 'User', status: 'Active' },
+                                { name: 'Bob Johnson', email: 'bob@example.com', role: 'Editor', status: 'Inactive' }
+                            ];
+                            
+                            const transaction = event.target.transaction;
+                            const userStore = transaction.objectStore('users');
+                            
+                            users.forEach(user => {
+                                userStore.add(user);
+                            });
+                        }
+                    };
+                });
             },
             
             getUsers() {
-                return JSON.parse(localStorage.getItem('users') || '[]');
+                return new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction(['users'], 'readonly');
+                    const store = transaction.objectStore('users');
+                    const request = store.getAll();
+                    
+                    request.onerror = () => {
+                        reject(new Error('Failed to get users'));
+                    };
+                    
+                    request.onsuccess = () => {
+                        resolve(request.result);
+                    };
+                });
             },
             
             getUser(id) {
-                const users = this.getUsers();
-                return users.find(user => user.id === parseInt(id));
+                return new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction(['users'], 'readonly');
+                    const store = transaction.objectStore('users');
+                    const request = store.get(id);
+                    
+                    request.onerror = () => {
+                        reject(new Error('Failed to get user'));
+                    };
+                    
+                    request.onsuccess = () => {
+                        resolve(request.result);
+                    };
+                });
             },
             
-            createUser(userData) {
-                const users = this.getUsers();
-                const nextId = parseInt(localStorage.getItem('nextId') || '1');
-                const newUser = { id: nextId, ...userData };
-                users.push(newUser);
-                localStorage.setItem('users', JSON.stringify(users));
-                localStorage.setItem('nextId', (nextId + 1).toString());
-                return newUser;
+            addUser(userData) {
+                return new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction(['users'], 'readwrite');
+                    const store = transaction.objectStore('users');
+                    const request = store.add(userData);
+                    
+                    request.onerror = () => {
+                        reject(new Error('Failed to add user'));
+                    };
+                    
+                    request.onsuccess = () => {
+                        resolve(request.result); // Returns the ID of the new user
+                    };
+                });
             },
             
             updateUser(id, userData) {
-                const users = this.getUsers();
-                const index = users.findIndex(user => user.id === parseInt(id));
-                if (index !== -1) {
-                    users[index] = { ...users[index], ...userData };
-                    localStorage.setItem('users', JSON.stringify(users));
-                    return users[index];
-                }
-                return null;
+                return new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction(['users'], 'readwrite');
+                    const store = transaction.objectStore('users');
+                    
+                    // First get the user to preserve the ID
+                    const getRequest = store.get(id);
+                    
+                    getRequest.onerror = () => {
+                        reject(new Error('Failed to get user for update'));
+                    };
+                    
+                    getRequest.onsuccess = () => {
+                        const user = getRequest.result;
+                        if (user) {
+                            // Update the user data but keep the original ID
+                            const updatedUser = { ...user, ...userData };
+                            const putRequest = store.put(updatedUser);
+                            
+                            putRequest.onerror = () => {
+                                reject(new Error('Failed to update user'));
+                            };
+                            
+                            putRequest.onsuccess = () => {
+                                resolve(putRequest.result);
+                            };
+                        } else {
+                            reject(new Error('User not found'));
+                        }
+                    };
+                });
             },
             
             deleteUser(id) {
-                let users = this.getUsers();
-                users = users.filter(user => user.id !== parseInt(id));
-                localStorage.setItem('users', JSON.stringify(users));
-                return true;
+                return new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction(['users'], 'readwrite');
+                    const store = transaction.objectStore('users');
+                    const request = store.delete(id);
+                    
+                    request.onerror = () => {
+                        reject(new Error('Failed to delete user'));
+                    };
+                    
+                    request.onsuccess = () => {
+                        resolve(true);
+                    };
+                });
             },
             
             searchUsers(query) {
-                const users = this.getUsers();
-                if (!query) return users;
-                
-                const lowerQuery = query.toLowerCase();
-                return users.filter(user => 
-                    user.name.toLowerCase().includes(lowerQuery) ||
-                    user.email.toLowerCase().includes(lowerQuery) ||
-                    user.role.toLowerCase().includes(lowerQuery) ||
-                    user.status.toLowerCase().includes(lowerQuery)
-                );
+                return new Promise((resolve, reject) => {
+                    const transaction = this.db.transaction(['users'], 'readonly');
+                    const store = transaction.objectStore('users');
+                    const request = store.getAll();
+                    
+                    request.onerror = () => {
+                        reject(new Error('Failed to search users'));
+                    };
+                    
+                    request.onsuccess = () => {
+                        const users = request.result;
+                        if (!query) {
+                            resolve(users);
+                            return;
+                        }
+                        
+                        const lowerQuery = query.toLowerCase();
+                        const filteredUsers = users.filter(user => 
+                            user.name.toLowerCase().includes(lowerQuery) ||
+                            user.email.toLowerCase().includes(lowerQuery) ||
+                            user.role.toLowerCase().includes(lowerQuery) ||
+                            user.status.toLowerCase().includes(lowerQuery)
+                        );
+                        
+                        resolve(filteredUsers);
+                    };
+                });
             }
         };
 
-        // Backend API simulation
+        // Backend API
         const API = {
-            getUsers(query = '') {
-                return new Promise((resolve) => {
-                    setTimeout(() => {
-                        resolve(Database.searchUsers(query));
-                    }, 300);
-                });
+            async getUsers(query = '') {
+                try {
+                    return await Database.searchUsers(query);
+                } catch (error) {
+                    console.error('Error getting users:', error);
+                    throw error;
+                }
             },
             
-            getUser(id) {
-                return new Promise((resolve) => {
-                    setTimeout(() => {
-                        resolve(Database.getUser(id));
-                    }, 300);
-                });
+            async getUser(id) {
+                try {
+                    return await Database.getUser(id);
+                } catch (error) {
+                    console.error('Error getting user:', error);
+                    throw error;
+                }
             },
             
-            createUser(userData) {
-                return new Promise((resolve) => {
-                    setTimeout(() => {
-                        resolve(Database.createUser(userData));
-                    }, 500);
-                });
+            async createUser(userData) {
+                try {
+                    const userId = await Database.addUser(userData);
+                    return { id: userId, ...userData };
+                } catch (error) {
+                    console.error('Error creating user:', error);
+                    throw error;
+                }
             },
             
-            updateUser(id, userData) {
-                return new Promise((resolve) => {
-                    setTimeout(() => {
-                        resolve(Database.updateUser(id, userData));
-                    }, 500);
-                });
+            async updateUser(id, userData) {
+                try {
+                    return await Database.updateUser(id, userData);
+                } catch (error) {
+                    console.error('Error updating user:', error);
+                    throw error;
+                }
             },
             
-            deleteUser(id) {
-                return new Promise((resolve) => {
-                    setTimeout(() => {
-                        resolve(Database.deleteUser(id));
-                    }, 500);
-                });
+            async deleteUser(id) {
+                try {
+                    await Database.deleteUser(id);
+                    return true;
+                } catch (error) {
+                    console.error('Error deleting user:', error);
+                    throw error;
+                }
             }
         };
 
@@ -488,10 +626,16 @@
             currentUser: null,
             isEditing: false,
             
-            init() {
-                Database.init();
-                this.bindEvents();
-                this.loadUsers();
+            async init() {
+                try {
+                    // Initialize database
+                    await Database.init();
+                    this.bindEvents();
+                    this.loadUsers();
+                } catch (error) {
+                    this.showToast('Error initializing application', true);
+                    console.error('Initialization error:', error);
+                }
             },
             
             bindEvents() {
@@ -529,8 +673,13 @@
             },
             
             async loadUsers(query = '') {
-                const users = await API.getUsers(query);
-                this.renderUsers(users);
+                try {
+                    const users = await API.getUsers(query);
+                    this.renderUsers(users);
+                } catch (error) {
+                    this.showToast('Error loading users', true);
+                    console.error('Error loading users:', error);
+                }
             },
             
             renderUsers(users) {
@@ -579,22 +728,28 @@
             },
             
             async editUser(id) {
-                this.currentUser = await API.getUser(id);
-                if (this.currentUser) {
-                    this.isEditing = true;
-                    this.openModal();
-                    this.fillForm(this.currentUser);
+                try {
+                    this.currentUser = await API.getUser(id);
+                    if (this.currentUser) {
+                        this.isEditing = true;
+                        this.openModal();
+                        this.fillForm(this.currentUser);
+                    }
+                } catch (error) {
+                    this.showToast('Error loading user', true);
+                    console.error('Error loading user:', error);
                 }
             },
             
             async deleteUser(id) {
                 if (confirm('Are you sure you want to delete this user?')) {
-                    const success = await API.deleteUser(id);
-                    if (success) {
+                    try {
+                        await API.deleteUser(id);
                         this.showToast('User deleted successfully');
                         this.loadUsers();
-                    } else {
+                    } catch (error) {
                         this.showToast('Error deleting user', true);
+                        console.error('Error deleting user:', error);
                     }
                 }
             },
@@ -636,23 +791,19 @@
                 
                 try {
                     if (this.isEditing) {
-                        const updatedUser = await API.updateUser(this.currentUser.id, userData);
-                        if (updatedUser) {
-                            this.showToast('User updated successfully');
-                        } else {
-                            this.showToast('Error updating user', true);
-                        }
+                        const id = document.getElementById('userId').value;
+                        await API.updateUser(parseInt(id), userData);
+                        this.showToast('User updated successfully');
                     } else {
-                        const newUser = await API.createUser(userData);
-                        if (newUser) {
-                            this.showToast('User created successfully');
-                        }
+                        await API.createUser(userData);
+                        this.showToast('User created successfully');
                     }
                     
                     this.closeModal();
                     this.loadUsers();
                 } catch (error) {
                     this.showToast('Error saving user', true);
+                    console.error('Error saving user:', error);
                 }
             },
             
